@@ -23,6 +23,7 @@ __all__ = ["QuantizationScheme", "get_gguf_scheme", "preset_name_to_scheme"]
 class QuantizationScheme:
     bits: int = 4
     group_size: int = 128
+    grouped_channels: int = 1  # Only used when group_size=-1: groups N output channels together
     sym: bool = True
     data_type: str = "int"
     act_bits: Optional[int] = None

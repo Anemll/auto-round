@@ -89,6 +89,7 @@ class SupportedFormats:
             "auto_round:auto_awq",
             "auto_round:llm_compressor",
             "fake",
+            "qdq",
             "llm_compressor",
         )
         self._gguf_format = tuple(sorted(GGUF_CONFIG.keys()))

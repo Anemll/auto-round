@@ -582,6 +582,9 @@ def convert_hf_model(model: nn.Module, target_device: str = "cpu") -> tuple[nn.M
     elif packing_format == "auto_round:gptq":
         packing_format = "auto_round:auto_gptq"
 
+    # Debug logging
+    logger.info(f"convert_hf_model: backend={backend}, packing_format={packing_format}, target_device={target_device}")
+
     # Replace layers with quantized versions
     layer_configs = get_layer_config(model, quantization_config)
     used_backends = _replace_by_quant_layers(model, layer_configs, backend, target_device, packing_format)

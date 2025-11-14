@@ -295,10 +295,12 @@ def save_quantized_as_autoround(output_dir, inplace=True, backend="auto_round:ex
         return save_quantized_as_autoround(output_dir, inplace=inplace, backend="auto_round", **kwargs)
 
     # IF using sym, we change to gptq sym kernel to avoid compiling from auto_round source
+    # Skip replacement if explicitly using torch backend
     if (
         (kwargs.get("sym") is None or kwargs.get("sym"))
         and ("gptq" not in backend and "awq" not in backend)
         and (AutoRoundFormat.FP8_STATIC.value not in backend)
+        and ("torch" not in backend)
     ):
         backend = backend.replace("auto_round", "auto_round:auto_gptq")
 
@@ -331,7 +333,7 @@ def save_quantized_as_autoround(output_dir, inplace=True, backend="auto_round:ex
         elif cfg["in_blocks"] or (
             block_name_to_quantize is not None and check_start_with_block_name(layer_name, block_name_to_quantize)
         ):
-            neq_keys = check_neq_config(cfg, **{k: quantization_config[k] for k in scheme_keys})
+            neq_keys = check_neq_config(cfg, **{k: quantization_config.get(k) for k in scheme_keys})
             if len(neq_keys) > 0:
                 extra_config[layer_name] = {}
                 for key in scheme_keys:

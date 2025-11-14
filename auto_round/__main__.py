@@ -251,6 +251,13 @@ class BasicArgumentParser(argparse.ArgumentParser):
         scheme = self.add_argument_group("Scheme Arguments")
         scheme.add_argument("--bits", default=None, type=int, help="Number of bits for weight quantization. ")
         scheme.add_argument("--group_size", default=None, type=int, help="Group size for weight quantization.")
+        scheme.add_argument(
+            "--grouped_channels",
+            default=1,
+            type=int,
+            help="Number of output channels to group together. Only used when group_size=-1 (per-channel mode). "
+            "Default is 1 (standard per-channel). Example: --grouped_channels 8 groups every 8 channels together.",
+        )
         scheme.add_argument("--asym", action="store_true", help="Use asymmetric quantization instead of symmetric.")
         scheme.add_argument(
             "--data_type",
@@ -539,6 +546,7 @@ def tune(args):
     scheme_config = SchemeExtraConfig(
         bits=args.bits,
         group_size=args.group_size,
+        grouped_channels=args.grouped_channels,
         sym=sym,
         data_type=args.data_type,
         act_bits=args.act_bits,

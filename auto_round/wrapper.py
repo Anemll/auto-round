@@ -235,16 +235,29 @@ class WrapperLinear(torch.nn.Module):
             quant_kwargs["super_bits"] = self.orig_layer.super_bits
             quant_kwargs["super_group_size"] = self.orig_layer.super_group_size
 
+        # Get grouped_channels parameter
+        grouped_channels = getattr(self.orig_layer, "grouped_channels", 1)
+
+        # When using grouped_channels > 1, don't pass tensor_min/max as they were computed
+        # from the original shape and will have wrong dimensions after reshaping
+        if grouped_channels > 1:
+            tensor_min_arg = None
+            tensor_max_arg = None
+        else:
+            tensor_min_arg = self.weight_min
+            tensor_max_arg = self.weight_max
+
         weight_q, scale, zp = self.weight_quant_func(
             weight.to(self.device),
             bits=self.orig_layer.bits,
             group_size=self.orig_layer.group_size,
+            grouped_channels=grouped_channels,
             v=value,
             min_scale=min_scale,
             max_scale=max_scale,
             scale_dtype=self.orig_layer.scale_dtype,
-            tensor_min=self.weight_min,
-            tensor_max=self.weight_max,
+            tensor_min=tensor_min_arg,
+            tensor_max=tensor_max_arg,
             data_type=self.data_type,
             q_scale_thresh=self.q_scale_thresh,
             imatrix=self.orig_layer.imatrix if hasattr(self.orig_layer, "imatrix") else None,
@@ -330,10 +343,28 @@ class WrapperLinear(torch.nn.Module):
         if type(self.orig_layer) == transformers.pytorch_utils.Conv1D:
             shape = qdq_weight.t().shape
 
+        # Handle grouped_channels: need to "ungroup" the scale/zp back to original shape
+        grouped_channels = getattr(self.orig_layer, "grouped_channels", 1)
+
+        def _ungroup_tensor(tensor, target_channels, grouped_channels):
+            """Replicate grouped tensor values back to original per-channel shape."""
+            if grouped_channels <= 1:
+                return tensor
+            # tensor has shape [channels//grouped_channels, ...], need [channels, ...]
+            # Replicate each grouped value across the channels that were grouped
+            # E.g., [256, 1] -> [256, 1, 8] -> [2048, 1] for grouped_channels=8
+            expanded = tensor.unsqueeze(-2).expand(*tensor.shape[:-1], grouped_channels, tensor.shape[-1])
+            return expanded.reshape(target_channels, -1)
+
         def _set_dict_attr(attr_dict, attr_name):
             for key in attr_dict.keys():
                 if key == attr_name:
-                    setattr(self.orig_layer, attr_name, attr_dict[key].reshape(shape[0], -1).to("cpu"))
+                    value = attr_dict[key]
+                    if grouped_channels > 1 and value.numel() > 1:
+                        value = _ungroup_tensor(value, shape[0], grouped_channels)
+                    else:
+                        value = value.reshape(shape[0], -1)
+                    setattr(self.orig_layer, attr_name, value.to("cpu"))
                 else:
                     name = "w_" + key
                     setattr(self.orig_layer, name, attr_dict[key].to("cpu"))
@@ -343,7 +374,11 @@ class WrapperLinear(torch.nn.Module):
         elif scale is None:
             self.orig_layer.scale = None
         elif scale.numel() > 1:
-            self.orig_layer.scale = scale.reshape(shape[0], -1).to("cpu")
+            if grouped_channels > 1:
+                scale = _ungroup_tensor(scale, shape[0], grouped_channels)
+            else:
+                scale = scale.reshape(shape[0], -1)
+            self.orig_layer.scale = scale.to("cpu")
         else:
             self.orig_layer.scale = scale.view(-1).to("cpu")
 
@@ -352,7 +387,10 @@ class WrapperLinear(torch.nn.Module):
                 _set_dict_attr(zp, "zp")
             elif isinstance(zp, torch.Tensor):
                 if zp.numel() > 1:
-                    zp = zp.reshape(shape[0], -1)
+                    if grouped_channels > 1:
+                        zp = _ungroup_tensor(zp, shape[0], grouped_channels)
+                    else:
+                        zp = zp.reshape(shape[0], -1)
                     self.orig_layer.zp = zp.to("cpu")
                 else:
                     self.orig_layer.zp = zp.view(-1).to("cpu")

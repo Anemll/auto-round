@@ -151,6 +151,16 @@ def in_feature_checker_group_size(in_feature, out_feature, config):
     return in_feature % group_size == 0
 
 
+def torch_backend_feature_checker(in_feature, out_feature, config):
+    """More permissive checker for torch backend - allows per-channel quantization (group_size=-1)"""
+    group_size = config["group_size"]
+    # For per-channel quantization (group_size=-1), always allow
+    if group_size == -1:
+        return True
+    # For grouped quantization, check divisibility
+    return in_feature % group_size == 0
+
+
 feature_multiply_checker_32 = functools.partial(feature_multiply_checker, in_feature_multiplier=32)
 feature_multiply_checker_16 = functools.partial(feature_multiply_checker, in_feature_multiplier=16)
 in_output_feature_multiply_checker_32 = functools.partial(
@@ -350,8 +360,9 @@ BackendInfos["auto_round:torch"] = BackendInfo(
     data_type=["int"],
     act_bits=WOQ_DEFAULT_ACT_BITS,
     bits=[2, 3, 4, 8],
+    group_size=None,  # None means any group_size is supported, including -1 (per-channel)
     priority=0,
-    checkers=[exllamav2_feature_checker],
+    checkers=[torch_backend_feature_checker],  # Use permissive checker that supports per-channel quantization
     alias=["auto_round", "torch"],
     requirements=["auto-round>=0.5.1"],
 )

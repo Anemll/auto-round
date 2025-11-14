@@ -238,7 +238,7 @@ def save_quantized_as_autogptq(output_dir, inplace=True, backend="auto_gptq:exll
             continue
         # Handle block layers
         if in_blocks or (block_name_to_quantize and check_start_with_block_name(layer_name, block_name_to_quantize)):
-            neq_keys = check_neq_config(cfg, **{k: quantization_config[k] for k in scheme_keys})
+            neq_keys = check_neq_config(cfg, **{k: quantization_config.get(k) for k in scheme_keys})
             if neq_keys:
                 if matches_any_regex(layer_name, regex_config):
                     continue

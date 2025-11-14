@@ -23,18 +23,19 @@ from auto_round.data_type.register import QUANT_FUNC_WITH_DTYPE
 from auto_round.utils import logger
 
 
-def reshape_pad_tensor_by_group_size(data: torch.Tensor, group_size: int):
-    """Reshapes and pads the tensor to ensure that it can be quantized in groups of `group_size`.
+def reshape_pad_tensor_by_group_size(data: torch.Tensor, group_size: int, grouped_channels: int = 1):
+    """Reshapes and pads the tensor to ensure that it can be quantized in groups.
 
-    This function adjusts the
-    input tensor's shape so that its last dimension is a multiple
-    of the specified `group_size`. If padding is required, it adds padding to the tensor
-    to achieve this. If the tensor's last dimension is already divisible by `group_size`,
-    no padding is applied.
+    This function adjusts the input tensor's shape for quantization grouping:
+    - `group_size` controls grouping along the input feature dimension (columns)
+    - `grouped_channels` controls grouping along the output channel dimension (rows)
 
     Args:
         data (torch.Tensor): The input tensor to be reshaped and padded.
-        group_size (int): The size of the groups that the tensor should be reshaped into.
+        group_size (int): The size of groups along input features.
+                         -1 = per-channel, 0 = per-tensor, >0 = grouped
+        grouped_channels (int): Number of output channels to group together.
+                               1 = standard per-channel (default), >1 = grouped channels
 
     Returns:
         torch.Tensor: The reshaped and padded tensor, if necessary.
@@ -43,11 +44,33 @@ def reshape_pad_tensor_by_group_size(data: torch.Tensor, group_size: int):
     """
     orig_shape = data.shape
     pad_len = 0
+
+    # Handle per-tensor quantization first (entire tensor shares one scale)
     if group_size == 0:
         data = data.reshape(1, -1)
         return data, orig_shape, pad_len
+
     if len(data.shape) > 2:
         data = data.reshape(-1, orig_shape[-1])
+
+    # Handle grouped_channels (grouping along output channel dimension)
+    # This takes precedence when group_size == -1 (per-channel mode)
+    if group_size == -1 and grouped_channels > 1:
+        out_channels, in_features = data.shape
+
+        # Check if we can group the channels
+        if out_channels % grouped_channels == 0 and out_channels >= grouped_channels:
+            # Reshape: [out_channels, in_features] -> [out_channels // grouped_channels, grouped_channels * in_features]
+            new_shape = (out_channels // grouped_channels, grouped_channels * in_features)
+            logger.debug(f"Grouping channels: {data.shape} -> {new_shape} (grouped_channels={grouped_channels})")
+            data = data.reshape(new_shape)
+            return data, orig_shape, pad_len
+        else:
+            # Cannot evenly group channels, fall back to standard per-channel
+            logger.warning(f"Cannot group {out_channels} channels by {grouped_channels} (not divisible), falling back to per-channel")
+            return data, orig_shape, pad_len
+
+    # Standard group_size handling (grouping along input feature dimension)
     if group_size == -1 or data.shape[1] < group_size:
         return data, orig_shape, pad_len
     elif data.shape[1] % group_size == 0:

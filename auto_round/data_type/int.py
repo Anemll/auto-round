@@ -45,13 +45,14 @@ def search_scales(data: torch.Tensor, bits: int, qw: Union[None, torch.Tensor, f
 
 
 @register_dtype("rtn_int_sym")
-def quant_tensor_rtn_sym(tensor, bits=4, group_size=-1, v=0, q_scale_thresh=1e-5, imatrix=None, **kwargs):
+def quant_tensor_rtn_sym(tensor, bits=4, group_size=-1, grouped_channels=1, v=0, q_scale_thresh=1e-5, imatrix=None, **kwargs):
     """Quantize and de-quantize tensor asymmetrically. full range, credict goes to llamacpp community
 
     Args:
         tensor: Tensor containing the tensor to be quantized
         bits: Number of bits for quantization (e.g., 2, 3, 4, 8)
         group_size: Number of elements to share scale for quantization
+        grouped_channels: Number of output channels to group together (1=per-channel, >1=grouped)
         v: Rounding value perturbation
         min_scale: Minimum scale coefficient for tensor
         max_scale: Maximum scale coefficient for tensor
@@ -65,7 +66,7 @@ def quant_tensor_rtn_sym(tensor, bits=4, group_size=-1, v=0, q_scale_thresh=1e-5
     """
     from auto_round.data_type.gguf import _imatrix_handle_zero
 
-    tensor, orig_shape, pad_len = reshape_pad_tensor_by_group_size(tensor, group_size)
+    tensor, orig_shape, pad_len = reshape_pad_tensor_by_group_size(tensor, group_size, grouped_channels)
     maxq = 2 ** (bits - 1)
     if imatrix is None:
         imatrix = 1.0
@@ -91,6 +92,7 @@ def quant_tensor_sym(
     tensor,
     bits=4,
     group_size=-1,
+    grouped_channels=1,
     v=0,
     min_scale=1.0,
     max_scale=1.0,
@@ -106,6 +108,7 @@ def quant_tensor_sym(
         tensor: Tensor containing the tensor to be quantized
         bits: Number of bits for quantization (e.g., 2, 3, 4, 8)
         group_size: Number of elements to share scale for quantization
+        grouped_channels: Number of output channels to group together (1=per-channel, >1=grouped)
         v: Rounding value perturbation
         min_scale: Minimum scale coefficient for tensor
         max_scale: Maximum scale coefficient for tensor
@@ -118,7 +121,7 @@ def quant_tensor_sym(
         Quantized and de-quantized tensor, scale, zero-point
     """
 
-    tensor, orig_shape, pad_len = reshape_pad_tensor_by_group_size(tensor, group_size)
+    tensor, orig_shape, pad_len = reshape_pad_tensor_by_group_size(tensor, group_size, grouped_channels)
     maxq = 2 ** (bits - 1)
     if tensor_min is None or tensor_max is None:
         wmin_tmp = torch.clamp(tensor.min(-1)[0], max=0)
@@ -126,6 +129,28 @@ def quant_tensor_sym(
     else:
         wmin_tmp = tensor_min
         wmax_tmp = tensor_max
+
+    # Handle min_scale/max_scale reshaping for grouped_channels
+    # When grouped_channels > 1, these tuning parameters have the original shape [orig_out_channels]
+    # and need to be grouped to [new_out_channels] to match the reshaped tensor
+    if isinstance(min_scale, torch.Tensor) and group_size == -1 and grouped_channels > 1:
+        # min_scale/max_scale have shape [2048], need [256] for grouped_channels=8
+        # Reshape [2048] -> [256, 8] and take mean across the 8 channels being grouped
+        if min_scale.numel() == orig_shape[0]:  # Verify it matches original out_channels
+            min_scale = min_scale.reshape(-1, grouped_channels).mean(dim=1)
+    if isinstance(max_scale, torch.Tensor) and group_size == -1 and grouped_channels > 1:
+        if max_scale.numel() == orig_shape[0]:
+            max_scale = max_scale.reshape(-1, grouped_channels).mean(dim=1)
+
+    # Handle v parameter reshaping for grouped_channels
+    # v (rounding perturbation) has shape [orig_out_channels, in_features] and needs to be
+    # reshaped to [new_out_channels, grouped_channels * in_features] to match the grouped tensor
+    if isinstance(v, torch.Tensor) and group_size == -1 and grouped_channels > 1:
+        if v.shape == orig_shape:  # v has original shape [2048, 1024]
+            # Reshape [2048, 1024] -> [256, 8192] to match grouped tensor
+            out_channels, in_features = orig_shape
+            new_out_channels = out_channels // grouped_channels
+            v = v.reshape(new_out_channels, grouped_channels * in_features)
 
     wmin_abs = -(wmin_tmp * min_scale)  # pylint: disable=E1130
     wmax_abs = wmax_tmp * max_scale
@@ -145,6 +170,7 @@ def quant_tensor_asym(
     tensor,
     bits=4,
     group_size=-1,
+    grouped_channels=1,
     v=0,
     min_scale=1.0,
     max_scale=1.0,
@@ -160,6 +186,7 @@ def quant_tensor_asym(
         tensor: Tensor containing the tensor to be quantized
         bits: Number of bits for quantization (e.g., 2, 3, 4, 8)
         group_size: Number of elements to share scale for quantization
+        grouped_channels: Number of output channels to group together (1=per-channel, >1=grouped)
         v: Rounding value perturbation
         min_scale: Minimum scale coefficient for tensor
         max_scale: Maximum scale coefficient for tensor
@@ -171,7 +198,7 @@ def quant_tensor_asym(
     Returns:
         Quantized and de-quantized tensor, scale, zero-point
     """
-    tensor, orig_shape, pad_len = reshape_pad_tensor_by_group_size(tensor, group_size)
+    tensor, orig_shape, pad_len = reshape_pad_tensor_by_group_size(tensor, group_size, grouped_channels)
     maxq = 2**bits - 1
     if tensor_min is None or tensor_max is None:
         wmin_tmp = torch.clamp(tensor.min(-1)[0], max=0)
@@ -179,6 +206,22 @@ def quant_tensor_asym(
     else:
         wmin_tmp = tensor_min
         wmax_tmp = tensor_max
+
+    # Handle min_scale/max_scale reshaping for grouped_channels
+    if isinstance(min_scale, torch.Tensor) and group_size == -1 and grouped_channels > 1:
+        if min_scale.numel() == orig_shape[0]:
+            min_scale = min_scale.reshape(-1, grouped_channels).mean(dim=1)
+    if isinstance(max_scale, torch.Tensor) and group_size == -1 and grouped_channels > 1:
+        if max_scale.numel() == orig_shape[0]:
+            max_scale = max_scale.reshape(-1, grouped_channels).mean(dim=1)
+
+    # Handle v parameter reshaping for grouped_channels
+    if isinstance(v, torch.Tensor) and group_size == -1 and grouped_channels > 1:
+        if v.shape == orig_shape:
+            out_channels, in_features = orig_shape
+            new_out_channels = out_channels // grouped_channels
+            v = v.reshape(new_out_channels, grouped_channels * in_features)
+
     if isinstance(min_scale, torch.Tensor):
         wmin = wmin_tmp * min_scale
         wmax = wmax_tmp * max_scale
@@ -202,6 +245,7 @@ def quant_tensor_sym_gptq(
     tensor,
     bits=4,
     group_size=-1,
+    grouped_channels=1,
     v=0,
     min_scale=1.0,
     max_scale=1.0,
@@ -217,6 +261,7 @@ def quant_tensor_sym_gptq(
         tensor: Tensor containing the tensor to be quantized
         bits: Number of bits for quantization (e.g., 2, 3, 4, 8)
         group_size: Number of elements to share scale for quantization
+        grouped_channels: Number of output channels to group together (1=per-channel, >1=grouped)
         v: Rounding value perturbation
         min_scale: Minimum scale coefficient for tensor
         max_scale: Maximum scale coefficient for tensor
@@ -228,7 +273,7 @@ def quant_tensor_sym_gptq(
     Returns:
         Quantized and de-quantized tensor, scale, zero-point
     """
-    tensor, orig_shape, pad_len = reshape_pad_tensor_by_group_size(tensor, group_size)
+    tensor, orig_shape, pad_len = reshape_pad_tensor_by_group_size(tensor, group_size, grouped_channels)
     maxq = 2**bits - 1
     if tensor_min is None or tensor_max is None:
         wmin_tmp = torch.clamp(tensor.min(-1)[0], max=0)
@@ -236,6 +281,22 @@ def quant_tensor_sym_gptq(
     else:
         wmin_tmp = tensor_min
         wmax_tmp = tensor_max
+
+    # Handle min_scale/max_scale reshaping for grouped_channels
+    if isinstance(min_scale, torch.Tensor) and group_size == -1 and grouped_channels > 1:
+        if min_scale.numel() == orig_shape[0]:
+            min_scale = min_scale.reshape(-1, grouped_channels).mean(dim=1)
+    if isinstance(max_scale, torch.Tensor) and group_size == -1 and grouped_channels > 1:
+        if max_scale.numel() == orig_shape[0]:
+            max_scale = max_scale.reshape(-1, grouped_channels).mean(dim=1)
+
+    # Handle v parameter reshaping for grouped_channels
+    if isinstance(v, torch.Tensor) and group_size == -1 and grouped_channels > 1:
+        if v.shape == orig_shape:
+            out_channels, in_features = orig_shape
+            new_out_channels = out_channels // grouped_channels
+            v = v.reshape(new_out_channels, grouped_channels * in_features)
+
     if isinstance(min_scale, torch.Tensor):
         wmin = wmin_tmp * min_scale
         wmax = wmax_tmp * max_scale
@@ -265,6 +326,7 @@ def quant_tensor_asym_wo_round(
     tensor,
     bits=4,
     group_size=-1,
+    grouped_channels=1,
     v=0,
     min_scale=1.0,
     max_scale=1.0,
@@ -280,6 +342,7 @@ def quant_tensor_asym_wo_round(
         tensor: Tensor containing the tensor to be quantized
         bits: Number of bits for quantization (e.g., 2, 3, 4, 8)
         group_size: Number of elements to share scale for quantization
+        grouped_channels: Number of output channels to group together (1=per-channel, >1=grouped)
         v: Rounding value perturbation
         min_scale: Minimum scale coefficient for tensor
         max_scale: Maximum scale coefficient for tensor
@@ -291,7 +354,7 @@ def quant_tensor_asym_wo_round(
     Returns:
         Quantized and de-quantize tensor, scale, zero-point
     """
-    tensor, orig_shape, pad_len = reshape_pad_tensor_by_group_size(tensor, group_size)
+    tensor, orig_shape, pad_len = reshape_pad_tensor_by_group_size(tensor, group_size, grouped_channels)
     maxq = 2**bits - 1
     if tensor_min is None or tensor_max is None:
         wmin_tmp = torch.clamp(tensor.min(-1)[0], max=0)
@@ -299,6 +362,22 @@ def quant_tensor_asym_wo_round(
     else:
         wmin_tmp = tensor_min
         wmax_tmp = tensor_max
+
+    # Handle min_scale/max_scale reshaping for grouped_channels
+    if isinstance(min_scale, torch.Tensor) and group_size == -1 and grouped_channels > 1:
+        if min_scale.numel() == orig_shape[0]:
+            min_scale = min_scale.reshape(-1, grouped_channels).mean(dim=1)
+    if isinstance(max_scale, torch.Tensor) and group_size == -1 and grouped_channels > 1:
+        if max_scale.numel() == orig_shape[0]:
+            max_scale = max_scale.reshape(-1, grouped_channels).mean(dim=1)
+
+    # Handle v parameter reshaping for grouped_channels
+    if isinstance(v, torch.Tensor) and group_size == -1 and grouped_channels > 1:
+        if v.shape == orig_shape:
+            out_channels, in_features = orig_shape
+            new_out_channels = out_channels // grouped_channels
+            v = v.reshape(new_out_channels, grouped_channels * in_features)
+
     if isinstance(min_scale, torch.Tensor):
         wmin = wmin_tmp * min_scale
         wmax = wmax_tmp * max_scale

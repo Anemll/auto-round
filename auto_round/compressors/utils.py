@@ -318,6 +318,12 @@ def set_layer_config(
     else:
         default_dict = asdict(default_scheme)
     default_dict["scale_dtype"] = default_scale_dtype
+
+    # DEBUG: Check if grouped_channels is in default_dict
+    from auto_round.utils import logger
+    logger.info(f"[DEBUG set_layer_config] default_dict keys: {list(default_dict.keys())}")
+    logger.info(f"[DEBUG set_layer_config] grouped_channels in default_dict: {default_dict.get('grouped_channels', 'NOT_FOUND')}")
+
     for cfg in layer_config.values():
         for key in scheme_keys:
             cfg.setdefault(key, copy.deepcopy(default_dict.get(key)))

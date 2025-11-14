@@ -122,6 +122,7 @@ class BaseCompressor(object):
 
     bits: int | None
     group_size: int | None
+    grouped_channels: int | None
     sym: bool | None
     data_type: str | None
     act_bits: int | None
@@ -213,7 +214,17 @@ class BaseCompressor(object):
             ... }
         """
 
+        # DEBUG: Check kwargs before parsing scheme
+        logger.info(f"[DEBUG] kwargs keys: {list(kwargs.keys())}")
+        logger.info(f"[DEBUG] 'grouped_channels' in kwargs: {'grouped_channels' in kwargs}")
+        if 'grouped_channels' in kwargs:
+            logger.info(f"[DEBUG] grouped_channels value in kwargs: {kwargs['grouped_channels']}")
+
         self.scheme, self.is_auto_scheme = self._parse_and_set_scheme(scheme, kwargs)
+
+        # DEBUG: Check if grouped_channels is set as attribute
+        logger.info(f"[DEBUG] After _parse_and_set_scheme:")
+        logger.info(f"[DEBUG] self.grouped_channels = {getattr(self, 'grouped_channels', 'NOT_SET')}")
 
         gguf_scheme_name = get_gguf_scheme(self.scheme)
         # GGUF uses fp32 scale dtype as default
@@ -508,11 +519,21 @@ class BaseCompressor(object):
                 scheme = scheme.upper()
                 scheme = asdict(preset_name_to_scheme(scheme))
             scheme_keys = [f.name for f in fields(QuantizationScheme)]
+            # DEBUG: Check if grouped_channels is in scheme_keys
+            logger.info(f"[DEBUG] scheme_keys: {scheme_keys}")
+            logger.info(f"[DEBUG] 'grouped_channels' in scheme_keys: {'grouped_channels' in scheme_keys}")
+
             for key in scheme_keys:
                 if key in kwargs and kwargs[key] is not None:
-                    setattr(self, key, kwargs[key])
+                    value = kwargs[key]
+                    if key == 'grouped_channels':
+                        logger.info(f"[DEBUG] Setting grouped_channels from kwargs: {value}")
+                    setattr(self, key, value)
                 else:
-                    setattr(self, key, scheme.get(key, None))
+                    value = scheme.get(key, None)
+                    if key == 'grouped_channels':
+                        logger.info(f"[DEBUG] Setting grouped_channels from scheme: {value}")
+                    setattr(self, key, value)
                 # kwargs.pop(key, None)
             if self.act_dynamic is None:
                 self.act_dynamic = True
@@ -559,10 +580,17 @@ class BaseCompressor(object):
                         break
             for key in scheme_keys:
                 scheme[key] = getattr(self, key)
+
+            # DEBUG: Check if grouped_channels is in the final scheme dict
+            logger.info(f"[DEBUG] Final scheme dict keys: {list(scheme.keys())}")
+            logger.info(f"[DEBUG] grouped_channels in scheme dict: {scheme.get('grouped_channels', 'NOT_FOUND')}")
+
             if res and QuantizationScheme.from_dict(scheme) == preset_name_to_scheme(res):
                 return res
             else:
-                return QuantizationScheme.from_dict(scheme)
+                final_scheme = QuantizationScheme.from_dict(scheme)
+                logger.info(f"[DEBUG] Returning QuantizationScheme with grouped_channels={final_scheme.grouped_channels}")
+                return final_scheme
 
         if isinstance(scheme, AutoScheme):
             if len(scheme.options) <= 0:
@@ -1077,9 +1105,17 @@ class BaseCompressor(object):
 
             # Attempt quantization on GPU, fall back to CPU if OOM
             try:
+                # DEBUG: Print what's in config
+                logger.info(f"[DEBUG] Config keys for {name}: {list(config.keys())}")
+                logger.info(f"[DEBUG] grouped_channels in config: {'grouped_channels' in config}")
+                if 'grouped_channels' in config:
+                    logger.info(f"[DEBUG] grouped_channels value: {config['grouped_channels']}")
+
+                quant_params = {k: config.get(k, None) for k in ["bits", "group_size", "grouped_channels", "super_bits", "super_group_size", "scale_dtype"]}
+                logger.info(f"Quantizing {name}: grouped_channels={quant_params.get('grouped_channels', 'NOT_FOUND')}")
                 weight, scale, zp = quant_func(
                     module.weight.to(self.device),
-                    **{k: config[k] for k in ["bits", "group_size", "super_bits", "super_group_size", "scale_dtype"]},
+                    **quant_params,
                 )
             except torch.OutOfMemoryError:
                 cuda_error_msg = traceback.format_exc()
@@ -1090,7 +1126,7 @@ class BaseCompressor(object):
                         module.weight.to("cpu"),
                         **{
                             k: config[k]
-                            for k in ["bits", "group_size", "super_bits", "super_group_size", "scale_dtype"]
+                            for k in ["bits", "group_size", "grouped_channels", "super_bits", "super_group_size", "scale_dtype"]
                         },
                     )
                 except Exception as e:
@@ -2968,6 +3004,7 @@ class BaseCompressor(object):
         serialization_keys = [
             "bits",
             "group_size",
+            "grouped_channels",
             "sym",
             "data_type",
             "enable_quanted_input",
@@ -3003,6 +3040,10 @@ class BaseCompressor(object):
         serialization_dict["autoround_version"] = __version__
         if "scale_dtype" in serialization_dict.keys():
             serialization_dict["scale_dtype"] = str(serialization_dict["scale_dtype"])
+
+        # Allow backend to be overridden from kwargs
+        if "backend" in kwargs:
+            backend = kwargs.pop("backend")
 
         compressed_model = save_quantized_as_format(  # TODO refine the code
             output_dir,

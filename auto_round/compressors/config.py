@@ -265,6 +265,7 @@ class TuningExtraConfig(BaseExtraConfig):
 class SchemeExtraConfig(BaseExtraConfig):
     bits: int = None
     group_size: int = None
+    grouped_channels: int = 1
     sym: bool = None
     data_type: str = None
     act_bits: int = None
