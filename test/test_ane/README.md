@@ -7,8 +7,190 @@ This directory contains tests and utilities for verifying AutoRound quantization
 - `test_autoround.py` - Unit tests for AutoRound on ANE/MPS
 - `verify_fake_quantization.py` - Standalone script to verify fake-format quantization
 - `eval_hf_model.py` - Quality test script for HuggingFace models using AutoRound evaluation
+- `dequantize_gptq.py` - Script to dequantize GPTQ/AutoRound models to fake format
 - `_test_helpers.py` - Helper functions for testing
 - `conftest.py` - Pytest configuration
+
+## Installation and Setup
+
+### Prerequisites
+
+- Python 3.8 or higher
+- `uv` package manager (fast Python package installer)
+- Apple Silicon Mac (M1, M2, M3, etc.) for MPS/ANE support
+
+### Installing `uv`
+
+If you don't have `uv` installed, install it first:
+
+```bash
+# macOS/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Or using pip
+pip install uv
+```
+
+### Setting Up the Environment
+
+1. **Navigate to the auto-round repository root:**
+
+```bash
+cd /path/to/auto-round
+```
+
+2. **Create a virtual environment using `uv`:**
+
+```bash
+uv venv
+```
+
+This creates a `.venv` directory in the current location.
+
+3. **Activate the virtual environment:**
+
+```bash
+# macOS/Linux
+source .venv/bin/activate
+
+# Or if using uv's activation
+source .venv/bin/activate
+```
+
+4. **Install auto-round in editable mode:**
+
+```bash
+uv pip install -e .
+```
+
+This installs auto-round and its core dependencies. Note: On macOS ARM64, `tbb` may need to be installed separately via Homebrew if needed.
+
+5. **Install additional test dependencies (optional):**
+
+If you need additional dependencies for testing:
+
+```bash
+uv pip install -r test/test_ane/requirements.txt
+```
+
+### Quick Setup Script
+
+You can also set up everything in one go:
+
+```bash
+# Install uv if needed
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create venv and install
+cd /path/to/auto-round
+uv venv
+source .venv/bin/activate
+uv pip install -e .
+uv pip install -r test/test_ane/requirements.txt
+```
+
+### Verifying Installation
+
+Test that everything is installed correctly:
+
+```bash
+# Check auto-round is installed
+python -c "import auto_round; print(auto_round.__version__)"
+
+# Check MPS is available
+python -c "import torch; print('MPS available:', torch.backends.mps.is_available())"
+```
+
+## ⚠️ Important: Always Use `--format fake` by Default
+
+**Recommendation: Always specify `--format fake` when quantizing models, especially when targeting ANE conversion.**
+
+The `fake` format stores dequantized weights as floats, which makes the model:
+- ✅ **Required for ANE conversion** - ANE conversion tools typically require fake format (dequantized weights)
+- ✅ **Easier to evaluate** - Can be loaded with standard HuggingFace without special quantization code
+- ✅ **Compatible with more tools** - Works with `lm_eval`, standard inference pipelines, etc.
+- ✅ **Easier to convert** - Can be converted to other formats (ANE, GGUF, etc.) more easily
+- ✅ **Still contains quantization error** - The floats are approximations from quantized integers
+
+**Always include `--format fake` in your quantization commands (especially for ANE conversion):**
+
+```bash
+auto-round \
+  --model Qwen/Qwen3-0.6B \
+  --bits 4 \
+  --iters 200 \
+  --output_dir ./output \
+  --format fake \  # ← Always include this when targeting ANEMLL ANE conversion
+  --device_map mps:0
+```
+
+If you forgot to use `--format fake` during quantization, see the [Dequantizing Existing Models](#dequantizing-existing-models) section below.
+
+## Dequantizing Existing Models
+
+If you already quantized a model **without** using `--format fake`, you can still convert it to fake format afterward. This is useful when:
+- You forgot to specify `--format fake` during quantization
+- You have a GPTQ model that you want to convert to fake format
+- You want to evaluate a quantized model with standard tools
+
+### Using `dequantize_gptq.py` to Dequantize Models
+
+This script directly dequantizes from safetensors without loading the full model (more memory-efficient):
+
+```bash
+python test/test_ane/dequantize_gptq.py \
+  --input /path/to/quantized/model \
+  --output /path/to/dequantized/model \
+  --device cpu
+```
+
+**Features:**
+- ✅ Auto-detects quantization bits from model config
+- ✅ Memory-efficient (doesn't load full model)
+- ✅ Based on AutoGPTQ source code (correct dequantization)
+- ✅ Automatically tests inference after dequantization
+- ✅ Supports chat templates in inference test
+
+**Example:**
+
+```bash
+# Dequantize a GPTQ model
+python test/test_ane/dequantize_gptq.py \
+  --input /Users/anemll/Models/PTQ/Qwen3-0.6B-fpt-auto4.200/Qwen3-0.6B-fpt-clean-w4a16 \
+  --output /Users/anemll/Models/PTQ/Qwen3-0.6B-fpt-auto4.200.fake \
+  --device cpu
+
+# The script will:
+# 1. Auto-detect bits from config (or use --bits 4 to override)
+# 2. Dequantize all quantized layers
+# 3. Save as fake format
+# 4. Test inference automatically
+```
+
+**Options:**
+- `--bits`: Manually specify bits (2, 3, 4, 8). If not specified, auto-detects from config.
+- `--device`: Device for inference test (cpu, mps, cuda). Default: cpu
+- `--skip_test`: Skip inference test after dequantization
+- `--trust_remote_code`: Trust remote code when loading model
+
+### Verifying Dequantized Models
+
+After dequantizing, verify the model works:
+
+```bash
+# Test inference
+python test/test_ane/dequantize_gptq.py \
+  --input /path/to/quantized/model \
+  --output /path/to/dequantized/model \
+  --device cpu
+# (Inference test runs automatically)
+
+# Or evaluate with lm_eval
+python test/test_ane/eval_hf_model.py \
+  --model /path/to/dequantized/model \
+  --tasks boolq \
+  --device cpu
+```
 
 ## How to Quantize with Grouped Channels
 
