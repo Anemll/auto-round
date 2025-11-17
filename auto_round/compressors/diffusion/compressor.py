@@ -373,12 +373,12 @@ class DiffusionCompressor(BaseCompressor):
 
         # torch.cuda.empty_cache()
 
-    def save_quantized(self, output_dir=None, format="auto_round", inplace=True, **kwargs):
+    def save_quantized(self, output_dir=None, format="fake", inplace=True, **kwargs):
         """Save the quantized model to the specified output directory in the specified format.
 
         Args:
             output_dir (str, optional): The directory to save the quantized model. Defaults to None.
-            format (str, optional): The format in which to save the model. Defaults to "auto_round".
+            format (str, optional): The format in which to save the model. Defaults to "fake".
             inplace (bool, optional): Whether to modify the model in place. Defaults to True.
             **kwargs: Additional keyword arguments specific to the export format.
 

@@ -101,9 +101,9 @@ python -c "import auto_round; print(auto_round.__version__)"
 python -c "import torch; print('MPS available:', torch.backends.mps.is_available())"
 ```
 
-## ⚠️ Important: Always Use `--format fake` by Default
+## ✅ Default Format: `fake` (Recommended for ANE)
 
-**Recommendation: Always specify `--format fake` when quantizing models, especially when targeting ANE conversion.**
+**Good news: `fake` format is now the default!** You don't need to specify `--format fake` anymore (though you can still include it for clarity).
 
 The `fake` format stores dequantized weights as floats, which makes the model:
 - ✅ **Required for ANE conversion** - ANE conversion tools typically require fake format (dequantized weights)
@@ -112,7 +112,7 @@ The `fake` format stores dequantized weights as floats, which makes the model:
 - ✅ **Easier to convert** - Can be converted to other formats (ANE, GGUF, etc.) more easily
 - ✅ **Still contains quantization error** - The floats are approximations from quantized integers
 
-**Always include `--format fake` in your quantization commands (especially for ANE conversion):**
+**Example quantization command (format is now optional):**
 
 ```bash
 auto-round \
@@ -120,17 +120,29 @@ auto-round \
   --bits 4 \
   --iters 200 \
   --output_dir ./output \
-  --format fake \  # ← Always include this when targeting ANEMLL ANE conversion
+  --device_map mps:0
+  # --format fake is now the default, so you can omit it
+```
+
+If you need a different format (e.g., `auto_round`, `auto_gptq`), you can still specify it explicitly:
+
+```bash
+auto-round \
+  --model Qwen/Qwen3-0.6B \
+  --bits 4 \
+  --format auto_round \  # Explicitly request a different format
+  --output_dir ./output \
   --device_map mps:0
 ```
 
-If you forgot to use `--format fake` during quantization, see the [Dequantizing Existing Models](#dequantizing-existing-models) section below.
+If you have an older model quantized **without** fake format, see the [Dequantizing Existing Models](#dequantizing-existing-models) section below.
 
 ## Dequantizing Existing Models
 
-If you already quantized a model **without** using `--format fake`, you can still convert it to fake format afterward. This is useful when:
-- You forgot to specify `--format fake` during quantization
-- You have a GPTQ model that you want to convert to fake format
+If you have a model quantized in a different format (e.g., `auto_round`, `auto_gptq`, or older models), you can convert it to fake format afterward. This is useful when:
+- You have an older model quantized before `fake` became the default
+- You explicitly used a different format (e.g., `--format auto_gptq`) and want to convert it
+- You have a GPTQ model from another source that you want to convert to fake format
 - You want to evaluate a quantized model with standard tools
 
 ### Using `dequantize_gptq.py` to Dequantize Models
@@ -213,7 +225,6 @@ auto-round \
   --bits 4 \
   --iters 200 \
   --output_dir ./output \
-  --format fake \
   --group_size -1 \
   --grouped_channels 8 \
   --nsamples 512 \
@@ -223,18 +234,18 @@ auto-round \
   --data_type int \
   --seqlen 1024 \
   --device_map mps:0
+  # --format fake is the default, so it's optional
 ```
 
 #### Example 2: Complete Workflow with Grouped Channels
 
 ```bash
-# Step 1: Quantize with grouped_channels=8
+# Step 1: Quantize with grouped_channels=8 (fake format is default)
 auto-round \
   --model Qwen/Qwen3-0.6B \
   --bits 4 \
   --iters 200 \
   --output_dir /Users/anemll/Models/PTQ/new/qwen3-0.6b-4bit-gc8-200 \
-  --format fake \
   --group_size -1 \
   --grouped_channels 8 \
   --nsamples 512 \
@@ -267,7 +278,6 @@ auto-round \
   --bits 4 \
   --iters 200 \
   --output_dir ./output-gc4 \
-  --format fake \
   --group_size -1 \
   --grouped_channels 4 \
   --nsamples 512 \
@@ -279,7 +289,6 @@ auto-round \
   --bits 4 \
   --iters 200 \
   --output_dir ./output-gc16 \
-  --format fake \
   --group_size -1 \
   --grouped_channels 16 \
   --nsamples 512 \
@@ -290,7 +299,7 @@ auto-round \
 
 - `--group_size -1`: Per-channel quantization (each channel/group has its own scale)
 - `--grouped_channels 8`: Groups every 8 output channels together for quantization
-- `--format fake`: Saves in fake format (dequantized weights as floats)
+- `--format fake`: Saves in fake format (dequantized weights as floats) - **This is now the default, so it's optional**
 
 ### Python API Usage
 
@@ -316,7 +325,9 @@ autoround = AutoRound(
     data_type="int",
 )
 
-model, folders = autoround.quantize_and_save("./output", format="fake")
+# format="fake" is now the default, so it's optional
+model, folders = autoround.quantize_and_save("./output")  # Uses fake format by default
+# Or explicitly specify: model, folders = autoround.quantize_and_save("./output", format="fake")
 ```
 
 ## How to Test if Grouped Channel Quantization is Correct
@@ -419,7 +430,7 @@ Checking multiple groups:
 
 2. **Verify quantization parameters**: Ensure you used the correct `--grouped-channels` value when quantizing.
 
-3. **Check model format**: Make sure the model was saved with `--format fake`.
+3. **Check model format**: Models are saved in `fake` format by default (since `fake` is now the default format). If you explicitly used a different format, make sure it's compatible with ANE conversion.
 
 4. **Verify quantization actually ran**: Check that the quantization process completed without errors.
 
@@ -467,7 +478,7 @@ After quantizing a model with AutoRound, you can convert it to Apple Neural Engi
 
 ### Notes on Conversion
 
-- The input model should be in AutoRound format (quantized with `--format fake` or `--format auto_round`)
+- The input model should be in AutoRound format. Since `fake` is now the default format, models quantized with the default settings will be in fake format. You can also explicitly use `--format fake` or `--format auto_round`.
 - ANE format is optimized for inference on Apple Neural Engine
 - Context length should match the sequence length used during quantization if possible
 
@@ -601,7 +612,6 @@ auto-round \
   --bits 4 \
   --iters 200 \
   --output_dir ./output \
-  --format fake \
   --fp_layers "model.layers.3.mlp.down_proj,model.layers.5.mlp.down_proj" \
   --device_map mps:0
 ```
@@ -673,7 +683,6 @@ auto-round \
   --bits 4 \
   --iters 200 \
   --output_dir ./output \
-  --format fake \
   --device_map mps:0
 
 # Step 2: If certain layers cause issues, re-quantize excluding them
@@ -682,7 +691,6 @@ auto-round \
   --bits 4 \
   --iters 200 \
   --output_dir ./output-fixed \
-  --format fake \
   --fp_layers "model.layers.3.mlp.down_proj,model.layers.5.mlp.down_proj" \
   --device_map mps:0
 ```

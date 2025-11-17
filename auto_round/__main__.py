@@ -135,9 +135,9 @@ class BasicArgumentParser(argparse.ArgumentParser):
         )
         basic.add_argument(
             "--format",
-            default="auto_round",
+            default="fake",
             type=str,
-            help="Output format for the quantized model." "'auto_round' is the recommended format",
+            help="Output format for the quantized model. Default is 'fake' (recommended for ANE conversion and evaluation).",
         )
         basic.add_argument(
             "--output_dir",
@@ -458,7 +458,7 @@ def tune(args):
     from auto_round.utils import detect_device, get_library_version, logger
 
     if args.format is None:
-        args.format = "auto_round"
+        args.format = "fake"
 
     formats = args.format.lower().replace(" ", "").split(",")
     from auto_round.utils import SUPPORTED_FORMATS
